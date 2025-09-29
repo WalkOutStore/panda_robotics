@@ -1,0 +1,84 @@
+# تثبيت المكتبات إذا لم تكن مثبتة
+# !pip install roboticstoolbox-python swift ipywidgets spatialmath
+
+import roboticstoolbox as rtb
+import swift
+import numpy as np
+from ipywidgets import interact, interactive, widgets
+from IPython.display import display, clear_output
+from spatialmath import SE3
+
+# ----- إعداد البيئة والمحاكي -----
+env = swift.Swift()
+env.launch(realtime=True)
+
+# تحميل الروبوت Panda
+panda = rtb.models.Panda()
+env.add(panda)
+
+# ----- عرض معلومات الروبوت -----
+info_output = widgets.Output()
+with info_output:
+    print(f"Robot: {panda.name}")
+    print(f"Number of joints: {panda.n}")
+    print(f"Current joint angles (rad): {panda.q}")
+display(info_output)
+
+# ----- Sliders للتحكم بالمفاصل -----
+joint_sliders = [widgets.FloatSlider(min=-np.pi, max=np.pi, step=0.01, value=float(p), description=f'J{i+1}') for i, p in enumerate(panda.q)]
+
+def update_robot(*args):
+    q = np.array([s.value for s in joint_sliders])
+    panda.q = q
+    env.step(0.05)
+    with info_output:
+        clear_output(wait=True)
+        print(f"Robot: {panda.name}")
+        print(f"Number of joints: {panda.n}")
+        print(f"Current joint angles (rad): {panda.q}")
+
+for s in joint_sliders:
+    s.observe(update_robot, names='value')
+
+sliders_box = widgets.VBox(joint_sliders)
+display(sliders_box)
+
+# ----- زر لإعادة الوضعية الافتراضية -----
+def reset_pose(b):
+    for i, s in enumerate(joint_sliders):
+        s.value = panda.qr[i]
+
+reset_button = widgets.Button(description="Reset Pose")
+reset_button.on_click(reset_pose)
+display(reset_button)
+
+# ----- وظيفة IK -----
+ik_output = widgets.Output()
+display(ik_output)
+
+def run_ik(x, y, z):
+    target_pose = SE3.Trans(x, y, z)  # الوضعية المطلوبة
+    sol = panda.ik_LM(target_pose)
+    if sol.success:
+        q_sol = sol.q
+        for i, s in enumerate(joint_sliders):
+            s.value = q_sol[i]  # تحديث sliders تلقائيًا
+        with ik_output:
+            clear_output(wait=True)
+            print("IK Successful!")
+            print(f"Joint angles (rad): {q_sol}")
+    else:
+        with ik_output:
+            clear_output(wait=True)
+            print("IK Failed!")
+
+# ----- Sliders لموقع end-effector -----
+ee_sliders = [widgets.FloatSlider(min=-1, max=1, step=0.01, value=0.0, description=axis) for axis in ['X','Y','Z']]
+def update_ik(*args):
+    x, y, z = [s.value for s in ee_sliders]
+    run_ik(x, y, z)
+
+for s in ee_sliders:
+    s.observe(update_ik, names='value')
+
+display(widgets.VBox(ee_sliders))
