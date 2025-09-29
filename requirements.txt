@@ -1,0 +1,6 @@
+python==3.11
+numpy==1.25.2
+roboticstoolbox-python
+swift
+spatialmath
+ipywidgets
