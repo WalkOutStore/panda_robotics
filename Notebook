@@ -1,84 +1,100 @@
-# تثبيت المكتبات إذا لم تكن مثبتة
-# !pip install roboticstoolbox-python swift ipywidgets spatialmath
-
 import roboticstoolbox as rtb
-import swift
-import numpy as np
-from ipywidgets import interact, interactive, widgets
-from IPython.display import display, clear_output
 from spatialmath import SE3
+import numpy as np
+import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from IPython.display import display
+import swift
+# روبوت Panda
+robot = rtb.models.Panda()
+q_initial = robot.qr.copy()  # وضعية جاهزة
 
-# ----- إعداد البيئة والمحاكي -----
+# Swift simulator
 env = swift.Swift()
 env.launch(realtime=True)
+env.add(robot)
 
-# تحميل الروبوت Panda
-panda = rtb.models.Panda()
-env.add(panda)
-
-# ----- عرض معلومات الروبوت -----
-info_output = widgets.Output()
-with info_output:
-    print(f"Robot: {panda.name}")
-    print(f"Number of joints: {panda.n}")
-    print(f"Current joint angles (rad): {panda.q}")
-display(info_output)
-
-# ----- Sliders للتحكم بالمفاصل -----
-joint_sliders = [widgets.FloatSlider(min=-np.pi, max=np.pi, step=0.01, value=float(p), description=f'J{i+1}') for i, p in enumerate(panda.q)]
-
-def update_robot(*args):
-    q = np.array([s.value for s in joint_sliders])
-    panda.q = q
-    env.step(0.05)
-    with info_output:
-        clear_output(wait=True)
-        print(f"Robot: {panda.name}")
-        print(f"Number of joints: {panda.n}")
-        print(f"Current joint angles (rad): {panda.q}")
-
-for s in joint_sliders:
-    s.observe(update_robot, names='value')
-
-sliders_box = widgets.VBox(joint_sliders)
-display(sliders_box)
-
-# ----- زر لإعادة الوضعية الافتراضية -----
-def reset_pose(b):
-    for i, s in enumerate(joint_sliders):
-        s.value = panda.qr[i]
-
-reset_button = widgets.Button(description="Reset Pose")
-reset_button.on_click(reset_pose)
-display(reset_button)
-
-# ----- وظيفة IK -----
-ik_output = widgets.Output()
-display(ik_output)
-
-def run_ik(x, y, z):
-    target_pose = SE3.Trans(x, y, z)  # الوضعية المطلوبة
-    sol = panda.ik_LM(target_pose)
+def display_robot_info(q):
+    T = robot.fkine(q)
+    J0 = robot.jacob0(q)
+    print("Forward Kinematics (FK) - End Effector Pose:\n", T)
+    print("\nJacobian (base frame):\n", J0)
+    print("\nCurrent Joint Angles:\n", q)
+    return T, J0
+def move_to_target(x, y, z):
+    T_goal = SE3.Trans(x, y, z) * SE3.OA([0,1,0],[0,0,-1])
+    sol = robot.ik_LM(T_goal)
     if sol.success:
         q_sol = sol.q
-        for i, s in enumerate(joint_sliders):
-            s.value = q_sol[i]  # تحديث sliders تلقائيًا
-        with ik_output:
-            clear_output(wait=True)
-            print("IK Successful!")
-            print(f"Joint angles (rad): {q_sol}")
+        print("IK Solution Found:", q_sol)
+        robot.q = q_sol
+        env.step(0.05)
     else:
-        with ik_output:
-            clear_output(wait=True)
-            print("IK Failed!")
+        print("IK Solution Not Found")
+    return sol
 
-# ----- Sliders لموقع end-effector -----
-ee_sliders = [widgets.FloatSlider(min=-1, max=1, step=0.01, value=0.0, description=axis) for axis in ['X','Y','Z']]
-def update_ik(*args):
-    x, y, z = [s.value for s in ee_sliders]
-    run_ik(x, y, z)
+sliders = []
+for i in range(robot.n):
+    s = widgets.FloatSlider(
+        value=q_initial[i]*180/np.pi,
+        min=-180, max=180, step=0.5,
+        description=f'q{i}', continuous_update=True
+    )
+    sliders.append(s)
 
-for s in ee_sliders:
-    s.observe(update_ik, names='value')
+def update_robot(*args):
+    q = np.array([s.value*np.pi/180 for s in sliders])
+    robot.q = q
+    env.step(0.05)
+    display_robot_info(q)
 
-display(widgets.VBox(ee_sliders))
+for s in sliders:
+    s.observe(update_robot, 'value')
+
+display(widgets.VBox(sliders))
+
+x_input = widgets.FloatText(value=0.6, description='X:')
+y_input = widgets.FloatText(value=0.0, description='Y:')
+z_input = widgets.FloatText(value=0.2, description='Z:')
+ik_button = widgets.Button(description="Move to Target (IK)")
+
+def ik_button_clicked(b):
+    move_to_target(x_input.value, y_input.value, z_input.value)
+
+ik_button.on_click(ik_button_clicked)
+display(widgets.HBox([x_input, y_input, z_input, ik_button]))
+# نقاط تخطيط مسار شكل حرف "B"
+points = [
+    [0.4, 0.0, 0.2],
+    [0.4, 0.05, 0.25],
+    [0.4, 0.1, 0.2],
+    [0.4, 0.05, 0.15],
+    [0.4, 0.0, 0.2]
+]
+
+trajectory_q = []
+for p in points:
+    T_goal = SE3.Trans(p[0], p[1], p[2])
+    sol = robot.ik_LM(T_goal)
+    if sol.success:
+        trajectory_q.append(sol.q)
+trajectory_q = np.array(trajectory_q)
+
+# رسم المسار في Swift
+for q in trajectory_q:
+    robot.q = q
+    env.step(0.05)
+
+# Optional: plot in matplotlib 3D
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+points_arr = np.array(points)
+ax.plot(points_arr[:,0], points_arr[:,1], points_arr[:,2], 'b.-')
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+plt.show()
+
+
+
+
